@@ -1,14 +1,12 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
+import serverless from "serverless-http"; // Netlify 지원을 위해 추가
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
-
 app.use(express.json());
 
 // Initialize Gemini Client Lazily/Safely
@@ -112,7 +110,6 @@ app.get("/api/game/starter-word", async (req, res) => {
   const randomWord = wordPool[Math.floor(Math.random() * wordPool.length)];
   
   if (!process.env.GEMINI_API_KEY) {
-    // Return standard start word if no key
     res.json({
       word: randomWord,
       english: randomWord === "사과" ? "Apple" : randomWord === "지구" ? "Earth" : "Universe",
@@ -170,7 +167,6 @@ app.post("/api/game/play-turn", async (req, res) => {
     return res.status(400).json({ error: "단어를 입력해주세요." });
   }
 
-  // Basic client validation to check matching rule with 두음법칙
   const trimmedUserWord = userWord.trim();
   const firstChar = trimmedUserWord.charAt(0);
   const lastCharPreceding = previousWord ? previousWord.charAt(previousWord.length - 1) : "";
@@ -192,7 +188,6 @@ app.post("/api/game/play-turn", async (req, res) => {
     });
   }
 
-  // Duplicate check
   if (historyList.some(w => w.trim() === trimmedUserWord)) {
     return res.json({
       isValid: false,
@@ -206,7 +201,6 @@ app.post("/api/game/play-turn", async (req, res) => {
   }
 
   if (!process.env.GEMINI_API_KEY) {
-    // Static Fallback logic when no API key is available
     const lastCharUser = trimmedUserWord.charAt(trimmedUserWord.length - 1);
     const modeConfig = fallbacks[mode as 'easy' | 'normal' | 'hard'] || fallbacks['normal'];
     const candidates = modeConfig.matches[lastCharUser] || [];
@@ -223,7 +217,6 @@ app.post("/api/game/play-turn", async (req, res) => {
         aiWordDefinition: validCandidate.def
       });
     } else {
-      // Create a fallback compound word dynamically
       const fallbackWord = lastCharUser + "점";
       return res.json({
         isValid: true,
@@ -241,7 +234,6 @@ app.post("/api/game/play-turn", async (req, res) => {
     const ai = getGeminiClient();
     const historyString = historyList.join(", ");
     
-    // Create system / control message
     const prompt = `
       Current Game Mode: ${mode}
       Preceding Word: ${previousWord}
@@ -250,17 +242,14 @@ app.post("/api/game/play-turn", async (req, res) => {
 
       Instructions:
       1. Check if user's word "${trimmedUserWord}" is a valid Korean real noun (명사) present in the dictionaries and does not violate word chain rules.
-      2. If invalid (e.g. not a noun, doesn't exist, isn't Korean, or is a slang/proper noun not registered as a standard dictionary word), return isValid: false with the exact Korean reason (e.g., '표준국어대사전에 존재하지 않는 단어입니다').
+      2. If invalid (e.g. not a noun, doesn't exist, isn't Korean, or is a slang/proper noun not registered as a standard dictionary word), return isValid: false with the exact Korean reason.
       3. If valid, set isValid: true.
-      4. Provide the correct English translation & meaning for the user's word in 'userWordTranslation' (e.g., 'Apple' or 'Energy') and a brief Korean definition in 'userWordDefinition' (e.g., '일을 할 수 있는 힘').
-      5. Next, generate a counter-word for AI ('aiWord') starting with the last character of "${trimmedUserWord}" (e.g. if user word ends with "자", AI word must start with "자").
-         - YOU CAN leverage Standard Initial Sound Laws (두음법칙) (e.g., if user word ends with '리', you can start AI word with '이').
+      4. Provide the correct English translation & meaning for the user's word in 'userWordTranslation' and a brief Korean definition in 'userWordDefinition'.
+      5. Next, generate a counter-word for AI ('aiWord') starting with the last character of "${trimmedUserWord}".
+         - YOU CAN leverage Standard Initial Sound Laws (두음법칙).
          - AI Word must be a valid Korean real noun.
          - AI Word MUST NOT be in already used list: [${historyString}].
-         - Tailor AI Word's rarity to difficulty:
-           * Easy: Simple everyday words like "자전거", "가방", "바다".
-           * Normal: Moderate difficulty words like "학문", "연구원", "식기세척기".
-           * Hard: Highly complex, long, academic, or rare words, ESPECIALLY targeting difficult endings such as "륨", "늄", "슭", "탉", "즙" if possible to create an engaging challenge for human players!
+         - Tailor AI Word's rarity to difficulty: Easy (simple), Normal (moderate), Hard (rare endings like "륨", "늄").
       6. Provide correct 'aiWordTranslation' and 'aiWordDefinition' for the selected AI word.
 
       Follow the response schema strictly. Return only pure JSON content.
@@ -274,13 +263,13 @@ app.post("/api/game/play-turn", async (req, res) => {
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            isValid: { type: Type.BOOLEAN, description: "Whether the user's word is valid" },
-            reason: { type: Type.STRING, description: "Reason if invalid" },
-            userWordTranslation: { type: Type.STRING, description: "English translation of user" },
-            userWordDefinition: { type: Type.STRING, description: "Definition of user word in Korean" },
-            aiWord: { type: Type.STRING, description: "Korean counter noun word selected by AI" },
-            aiWordTranslation: { type: Type.STRING, description: "English translation of AI word" },
-            aiWordDefinition: { type: Type.STRING, description: "Definition of AI word in Korean" }
+            isValid: { type: Type.BOOLEAN },
+            reason: { type: Type.STRING },
+            userWordTranslation: { type: Type.STRING },
+            userWordDefinition: { type: Type.STRING },
+            aiWord: { type: Type.STRING },
+            aiWordTranslation: { type: Type.STRING },
+            aiWordDefinition: { type: Type.STRING }
           },
           required: ["isValid", "reason", "userWordTranslation", "userWordDefinition", "aiWord", "aiWordTranslation", "aiWordDefinition"]
         }
@@ -291,7 +280,6 @@ app.post("/api/game/play-turn", async (req, res) => {
     res.json(body);
   } catch (error) {
     console.error("Gemini Validation Turn error:", error);
-    // Dynamic reliable automatic fallback
     const lastCharUser = trimmedUserWord.charAt(trimmedUserWord.length - 1);
     res.json({
       isValid: true,
@@ -327,25 +315,4 @@ app.post("/api/leaderboard", (req, res) => {
   res.json({ success: true, updatedLeaderboard: leaderboard.sort((a, b) => b.score - a.score) });
 });
 
-async function startServer() {
-  // APIs FIRST. Mount Vite middleware in development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
-
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on port ${PORT}`);
-  });
-}
-
-startServer();
+//
